@@ -754,6 +754,13 @@ if st.session_state.stage == "idle":
             {"asked_question": user_question}, config=config, stream_mode="updates"
         ):
             node_name = list(chunk.keys())[0]
+
+            # LangGraph emits a special "__interrupt__" chunk when a node calls
+            # interrupt() — its value is a tuple of Interrupt objects, not a
+            # normal state dict, so it must be handled separately.
+            if node_name == "__interrupt__":
+                break
+
             node_output = chunk[node_name]
             final_state.update(node_output)
             completed.append(node_name)
@@ -853,6 +860,10 @@ if st.session_state.stage == "awaiting_answers":
             Command(resume=human_answers), config=config, stream_mode="updates"
         ):
             node_name = list(chunk.keys())[0]
+
+            if node_name == "__interrupt__":
+                break
+
             final_state.update(chunk[node_name])
             completed.append(node_name)
             render_stepper(resume_stepper_placeholder, PAPER_STEPS, completed, current=None)
