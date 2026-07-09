@@ -653,13 +653,13 @@ def render_stepper(container, steps, completed, current=None):
             line_complete = "complete" if key in completed else ""
             line_html = f'<div class="step-line {line_complete}"></div>'
 
-        items_html += f"""
-        <div class="step-item">
-            {line_html}
-            <div class="step-circle {circle_class}">{circle_content}</div>
-            <div class="step-label {label_class}">{label}</div>
-        </div>
-        """
+        items_html += (
+            f'<div class="step-item">'
+            f'{line_html}'
+            f'<div class="step-circle {circle_class}">{circle_content}</div>'
+            f'<div class="step-label {label_class}">{label}</div>'
+            f'</div>'
+        )
 
     container.markdown(f'<div class="stepper-wrap">{items_html}</div>', unsafe_allow_html=True)
 
