@@ -3,7 +3,7 @@ langchain
 langchain-groq
 python-dotenv
 torchvision
-
+chromadb
 langchain-community
 langchain-text-splitters
 langchain-huggingface
