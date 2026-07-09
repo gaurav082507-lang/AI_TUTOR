@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
+import time
 import tempfile
 import streamlit as st
 
@@ -495,6 +496,73 @@ st.markdown("""
         white-space: pre-wrap;
         color: #e6edf3;
     }
+    .stepper-wrap {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        margin: 1.2rem 0 1.6rem 0;
+        padding: 1.2rem 1.6rem;
+        background-color: #161b22;
+        border: 1px solid #262b33;
+        border-radius: 12px;
+    }
+    .step-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        flex: 1;
+        position: relative;
+        text-align: center;
+    }
+    .step-circle {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.95rem;
+        font-weight: 700;
+        margin-bottom: 0.4rem;
+        border: 2px solid #30363d;
+        background-color: #0d1117;
+        color: #6b7280;
+        z-index: 2;
+    }
+    .step-circle.complete {
+        background-color: #16a34a;
+        border-color: #16a34a;
+        color: #ffffff;
+    }
+    .step-circle.current {
+        background-color: #1d4ed8;
+        border-color: #60a5fa;
+        color: #ffffff;
+        box-shadow: 0 0 0 4px rgba(96,165,250,0.25);
+    }
+    .step-label {
+        font-size: 0.78rem;
+        color: #9aa0a6;
+        max-width: 110px;
+        line-height: 1.15;
+    }
+    .step-label.active-label {
+        color: #e6edf3;
+        font-weight: 600;
+    }
+    .step-line {
+        position: absolute;
+        top: 17px;
+        left: 50%;
+        width: 100%;
+        height: 2px;
+        background-color: #30363d;
+        z-index: 1;
+    }
+    .step-line.complete {
+        background-color: #16a34a;
+    }
+
     .sidebar-credit {
         position: fixed;
         bottom: 1.2rem;
@@ -541,6 +609,59 @@ if "direct_answer" not in st.session_state:
     st.session_state.direct_answer = None
 if "last_query_type" not in st.session_state:
     st.session_state.last_query_type = None
+if "pipeline_path" not in st.session_state:
+    st.session_state.pipeline_path = None   # "rag" or "paper"
+if "completed_nodes" not in st.session_state:
+    st.session_state.completed_nodes = []
+
+# ---------- Pipeline step definitions ----------
+RAG_STEPS = [
+    ("Classifier", "Classifying Query"),
+    ("Get_Context", "Retrieving Context"),
+    ("Give_Answer", "Generating Answer"),
+]
+
+PAPER_STEPS = [
+    ("Classifier", "Classifying Query"),
+    ("Concept_Extractor", "Extracting Concepts"),
+    ("Make Question Paper", "Generating Paper"),
+    ("Human_Answer", "Awaiting Your Answers"),
+    ("Evaluate_Answer", "Evaluating Answers"),
+]
+
+
+def render_stepper(container, steps, completed, current=None):
+    """Render a horizontal progress stepper with ticks for completed nodes."""
+    n = len(steps)
+    items_html = ""
+    for i, (key, label) in enumerate(steps):
+        if key in completed:
+            circle_class = "complete"
+            circle_content = "✓"
+            label_class = "active-label"
+        elif key == current:
+            circle_class = "current"
+            circle_content = str(i + 1)
+            label_class = "active-label"
+        else:
+            circle_class = ""
+            circle_content = str(i + 1)
+            label_class = ""
+
+        line_html = ""
+        if i < n - 1:
+            line_complete = "complete" if key in completed else ""
+            line_html = f'<div class="step-line {line_complete}"></div>'
+
+        items_html += f"""
+        <div class="step-item">
+            {line_html}
+            <div class="step-circle {circle_class}">{circle_content}</div>
+            <div class="step-label {label_class}">{label}</div>
+        </div>
+        """
+
+    container.markdown(f'<div class="stepper-wrap">{items_html}</div>', unsafe_allow_html=True)
 
 # ---------- Sidebar ----------
 with st.sidebar:
@@ -575,8 +696,9 @@ with st.sidebar:
     st.divider()
     if st.session_state.pdf_ready:
         if st.button("🔄 Reset session", use_container_width=True):
-            for key in ["stage", "question_paper", "evaluation_report", "direct_answer", "last_query_type"]:
+            for key in ["stage", "question_paper", "evaluation_report", "direct_answer", "last_query_type", "pipeline_path"]:
                 st.session_state[key] = None if key != "stage" else "idle"
+            st.session_state.completed_nodes = []
             st.session_state.thread_id = f"session_{os.urandom(4).hex()}"
             st.rerun()
 
@@ -621,24 +743,60 @@ if st.session_state.stage == "idle":
 
     if submit and user_question.strip():
         config = {"configurable": {"thread_id": st.session_state.thread_id}}
-        with st.spinner("Thinking..."):
-            result = st.session_state.graph_app.invoke(
-                {"asked_question": user_question}, config=config
-            )
 
-        if "__interrupt__" in result:
-            interrupt_payload = result["__interrupt__"][0].value
-            st.session_state.question_paper = interrupt_payload["question_paper"]
+        stepper_placeholder = st.empty()
+        completed = []
+        steps_display = [("Classifier", "Classifying Query")]
+        render_stepper(stepper_placeholder, steps_display, completed, current="Classifier")
+
+        final_state = {}
+        for chunk in st.session_state.graph_app.stream(
+            {"asked_question": user_question}, config=config, stream_mode="updates"
+        ):
+            node_name = list(chunk.keys())[0]
+            node_output = chunk[node_name]
+            final_state.update(node_output)
+            completed.append(node_name)
+
+            if node_name == "Classifier":
+                category = node_output.get("query_type")
+                steps_display = RAG_STEPS if category == "Question asked to LLM" else PAPER_STEPS
+
+            next_current = None
+            for key, _ in steps_display:
+                if key not in completed:
+                    next_current = key
+                    break
+
+            render_stepper(stepper_placeholder, steps_display, completed, current=next_current)
+            time.sleep(0.35)
+
+        # Check whether the graph paused at Human_Answer (interrupt)
+        state_snapshot = st.session_state.graph_app.get_state(config)
+
+        if state_snapshot.next:
+            # Graph is paused, waiting for human answers
+            render_stepper(stepper_placeholder, steps_display, completed, current="Human_Answer")
+            interrupt_value = state_snapshot.tasks[0].interrupts[0].value
+            st.session_state.question_paper = interrupt_value["question_paper"]
+            st.session_state.pipeline_path = "paper"
+            st.session_state.completed_nodes = completed
             st.session_state.stage = "awaiting_answers"
             st.rerun()
         else:
-            st.session_state.direct_answer = result["messages"][-1][1] if result.get("messages") else None
-            st.session_state.last_query_type = result.get("query_type")
+            st.session_state.pipeline_path = "rag"
+            st.session_state.completed_nodes = completed
+            msgs = final_state.get("messages") or state_snapshot.values.get("messages")
+            st.session_state.direct_answer = msgs[-1][1] if msgs else None
+            st.session_state.last_query_type = state_snapshot.values.get("query_type")
             st.session_state.stage = "answered"
             st.rerun()
 
 # ---------- Stage: direct answer shown ----------
 if st.session_state.stage == "answered":
+    stepper_placeholder = st.empty()
+    render_stepper(stepper_placeholder, RAG_STEPS, st.session_state.completed_nodes)
+
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown('<span class="badge badge-blue">Direct Answer</span>', unsafe_allow_html=True)
     st.markdown("#### Response")
@@ -648,10 +806,15 @@ if st.session_state.stage == "answered":
     if st.button("↩ Ask another question"):
         st.session_state.stage = "idle"
         st.session_state.direct_answer = None
+        st.session_state.completed_nodes = []
+        st.session_state.pipeline_path = None
         st.rerun()
 
 # ---------- Stage: awaiting human answers ----------
 if st.session_state.stage == "awaiting_answers":
+    stepper_placeholder = st.empty()
+    render_stepper(stepper_placeholder, PAPER_STEPS, st.session_state.completed_nodes, current="Human_Answer")
+
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown('<span class="badge badge-amber">Question Paper Generated</span>', unsafe_allow_html=True)
     st.markdown("#### 📄 Your Question Paper")
@@ -678,16 +841,33 @@ if st.session_state.stage == "awaiting_answers":
 
     if submit_answers and human_answers.strip():
         config = {"configurable": {"thread_id": st.session_state.thread_id}}
-        with st.spinner("Evaluating your answers..."):
-            final_result = st.session_state.graph_app.invoke(
-                Command(resume=human_answers), config=config
-            )
-        st.session_state.evaluation_report = final_result.get("evaluation_report")
+
+        resume_stepper_placeholder = st.empty()
+        completed = list(st.session_state.completed_nodes)
+        render_stepper(resume_stepper_placeholder, PAPER_STEPS, completed, current="Human_Answer")
+        time.sleep(0.3)
+        completed.append("Human_Answer")
+
+        final_state = {}
+        for chunk in st.session_state.graph_app.stream(
+            Command(resume=human_answers), config=config, stream_mode="updates"
+        ):
+            node_name = list(chunk.keys())[0]
+            final_state.update(chunk[node_name])
+            completed.append(node_name)
+            render_stepper(resume_stepper_placeholder, PAPER_STEPS, completed, current=None)
+            time.sleep(0.35)
+
+        st.session_state.completed_nodes = completed
+        st.session_state.evaluation_report = final_state.get("evaluation_report")
         st.session_state.stage = "evaluated"
         st.rerun()
 
 # ---------- Stage: evaluation report ----------
 if st.session_state.stage == "evaluated":
+    stepper_placeholder = st.empty()
+    render_stepper(stepper_placeholder, PAPER_STEPS, st.session_state.completed_nodes)
+
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown('<span class="badge badge-green">Evaluation Complete</span>', unsafe_allow_html=True)
     st.markdown("#### 📊 Evaluation Report")
@@ -699,4 +879,6 @@ if st.session_state.stage == "evaluated":
         st.session_state.stage = "idle"
         st.session_state.question_paper = None
         st.session_state.evaluation_report = None
+        st.session_state.completed_nodes = []
+        st.session_state.pipeline_path = None
         st.rerun()
