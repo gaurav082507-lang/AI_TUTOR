@@ -19,7 +19,7 @@ from langchain_core.output_parsers import StrOutputParser
 # =========================================================
 # PAGE CONFIG + THEME
 # =========================================================
-st.set_page_config(page_title="TutorLens AI", page_icon="📘", layout="wide")
+st.set_page_config(page_title="TutorLens AI", page_icon="📘", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
