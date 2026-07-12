@@ -35,7 +35,9 @@ section[data-testid="stSidebar"]{
     background:var(--panel); border-right:1px solid var(--border);
 }
 section[data-testid="stSidebar"] * { color:var(--text); }
-#MainMenu, footer, header{ visibility:hidden; }
+#MainMenu{ visibility:hidden; }
+footer{ visibility:hidden; }
+header[data-testid="stHeader"]{ background:transparent; }
 
 .brand-row{ display:flex; align-items:center; gap:10px; margin-bottom:4px; }
 .brand-icon{
@@ -496,20 +498,40 @@ if run_clicked:
     if not question.strip():
         st.warning("Type a question first.")
     else:
-        with st.spinner("Routing your request through the tutor pipeline..."):
-            st.session_state["retriever"] = build_retriever(pdf_path)
-            app = build_graph()
-            result = app.invoke({"asked_question": question}, config=st.session_state.config)
+        st.session_state["retriever"] = build_retriever(pdf_path)
+        graph_app = build_graph()
 
-        if "__interrupt__" in result:
-            payload = result["__interrupt__"][0].value
-            st.session_state.question_paper = payload["question_paper"]
+        st.session_state.completed_nodes = set()
+        st.session_state.active_node = None
+        st.session_state.query_type = None
+
+        node_outputs = {}
+        interrupt_payload = None
+
+        with st.spinner("Routing your request through the tutor pipeline..."):
+            for chunk in graph_app.stream(
+                {"asked_question": question}, config=st.session_state.config, stream_mode="updates"
+            ):
+                for node_name, node_output in chunk.items():
+                    if node_name == "__interrupt__":
+                        interrupt_payload = node_output[0].value
+                        st.session_state.active_node = "Human_Answer"
+                        continue
+                    node_outputs[node_name] = node_output
+                    st.session_state.completed_nodes.add(node_name)
+                    if node_name == "Classifier":
+                        st.session_state.query_type = node_output.get("query_type")
+                render_workflow(workflow_placeholder)
+
+        if interrupt_payload is not None:
+            st.session_state.question_paper = interrupt_payload["question_paper"]
             st.session_state.stage = "paper"
             st.session_state.evaluation_report = None
         else:
-            st.session_state.last_answer = result["messages"][-1].content
+            answer_output = node_outputs.get("Give_Answer", {})
+            last_msg = answer_output.get("messages", [None])[-1]
+            st.session_state.last_answer = last_msg[1] if isinstance(last_msg, tuple) else getattr(last_msg, "content", "")
             st.session_state.stage = "answer"
-        st.session_state.query_type = result.get("query_type")
 
 content = st.container()
 with content:
@@ -538,10 +560,20 @@ with content:
             if not answers.strip():
                 st.warning("Write your answers first.")
             else:
+                graph_app = build_graph()
+                node_outputs = {}
                 with st.spinner("Evaluating your answers..."):
-                    app = build_graph()
-                    final_result = app.invoke(Command(resume=answers), config=st.session_state.config)
-                st.session_state.evaluation_report = final_result["evaluation_report"]
+                    for chunk in graph_app.stream(
+                        Command(resume=answers), config=st.session_state.config, stream_mode="updates"
+                    ):
+                        for node_name, node_output in chunk.items():
+                            if node_name == "__interrupt__":
+                                continue
+                            node_outputs[node_name] = node_output
+                            st.session_state.completed_nodes.add(node_name)
+                        render_workflow(workflow_placeholder)
+                st.session_state.active_node = None
+                st.session_state.evaluation_report = node_outputs.get("Evaluate_Answer", {}).get("evaluation_report")
                 st.session_state.stage = "evaluated"
                 st.rerun()
 
@@ -557,6 +589,8 @@ with content:
         if st.button("Ask another question"):
             st.session_state.stage = "idle"
             st.session_state.query_type = None
+            st.session_state.completed_nodes = set()
+            st.session_state.active_node = None
             st.rerun()
 
 st.markdown("""
