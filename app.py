@@ -432,6 +432,8 @@ def render_workflow():
         <div class="wf-col">
           <div class="wf-col-label">Not in the PDF</div>
           <div class="{cls(branch_c)}">Give general answer</div>
+          <div class="wf-down {'active' if branch_c else ''}">↓</div>
+          <div class="{cls(branch_c)}">Answer returned</div>
         </div>
         <div class="wf-col">
           <div class="wf-col-label">Make a question paper</div>
@@ -586,4 +588,8 @@ with content:
             st.session_state.query_type = None
             st.rerun()
 
-st.markdown('<div class="footer">Built for adaptive study sessions</div>', unsafe_allow_html=True)
+st.markdown("""
+<div class="footer">Built by Gaurav Gupta &middot;
+<a href="https://www.linkedin.com/in/gaurav-gupta-79754a377" target="_blank" style="color:var(--accent2);text-decoration:none;">Connect on LinkedIn</a>
+</div>
+""", unsafe_allow_html=True)
