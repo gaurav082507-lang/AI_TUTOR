@@ -161,40 +161,36 @@ class State(TypedDict):
     human_response: str
     evaluation_report: str
 
-CLASSIFIER_SYSTEM_PROMPT = """You are a strict text classifier. Read the user's input and classify it into exactly one of these three labels:
+CLASSIFIER_SYSTEM_PROMPT = """You are a strict binary text classifier. Read the user's input and classify it into exactly one of these two labels:
 
 LABEL 1: "Question asked to LLM"
-Definition: The user is directly asking a question that is likely answerable from the subject/domain covered by the reference PDF (the course material or book this tutor is built on). The user expects an answer, explanation, fact, or solution grounded in that material.
+Definition: The user is directly asking the LLM something and expects an answer, explanation, fact, opinion, or solution in response.
 Examples:
-- "What is the working principle of a venturimeter?"
-- "Explain the second law of thermodynamics as covered in this chapter."
-- "Why does the flow separate at this point?"
+- "What is the capital of France?"
+- "How does photosynthesis work?"
+- "Can you explain quantum entanglement?"
+- "Why is my code throwing a null pointer exception?"
 
 LABEL 2: "Telling the LLM to give Question"
 Definition: The user is instructing the LLM to produce, generate, write, or output one or more questions — the deliverable itself is a question, not an answer.
 Examples:
 - "Give me 5 interview questions about Python."
+- "Ask me a trivia question."
+- "Write a quiz question about World War II."
 - "Generate 10 exam questions on thermodynamics."
-
-LABEL 3: "General Question not in the PDF"
-Definition: The user is asking a direct question, but it is clearly outside the scope of the reference PDF's subject matter — general knowledge, small talk, or a topic unrelated to the book/course material. It still expects a direct answer, just not one the retriever should be trusted to ground.
-Examples:
-- "What is the capital of France?"
-- "Who won the last cricket world cup?"
-- "Tell me a joke."
+- "Create a question to test someone's knowledge of history."
 
 Classification rules:
-1. Judge intent, not just sentence structure. A sentence phrased as a question can still belong to LABEL 2 if it's asking the LLM to produce a question (e.g., "Can you frame a question about gravity?" → LABEL 2).
-2. Key signal for LABEL 2: verbs like "give," "generate," "write," "create," "frame," "ask," "prepare," "list" combined with the word "question(s)" as the object being produced.
-3. Key signal for LABEL 1 vs LABEL 3: both want a fact, explanation, or solution — the distinction is topical relevance to the reference PDF's subject area. If the question plausibly falls within the book/course's domain, choose LABEL 1. If unrelated (general trivia, current events, creative writing, small talk), choose LABEL 3.
-4. If genuinely ambiguous between LABEL 1 and LABEL 3, default to LABEL 1.
-5. If genuinely ambiguous between LABEL 1/3 and LABEL 2, default to LABEL 1.
+1. Judge intent, not just sentence structure. A sentence phrased as a question (ending in "?") can still belong to LABEL 2 if it's asking the LLM to produce a question (e.g., "Can you frame a question about gravity?" → LABEL 2).
+2. A sentence phrased as an imperative can still belong to LABEL 1 if it's really asking for information (e.g., "Tell me the capital of France" → LABEL 1).
+3. Key signal for LABEL 2: verbs like "give," "generate," "write," "create," "frame," "ask," "prepare," "list" combined with the word "question(s)" as the object being produced.
+4. Key signal for LABEL 1: the user wants a fact, explanation, opinion, calculation, or solution — the word "question" (if present) refers to what they're asking, not what they want produced.
+5. If genuinely ambiguous, default to LABEL 1, since most inputs to an LLM are direct questions.
 
 Output constraints:
-- Output must be exactly one of the three strings below, with no extra characters, punctuation, quotes, or explanation:
+- Output must be exactly one of the two strings below, with no extra characters, punctuation, quotes, or explanation:
 Question asked to LLM
-Telling the LLM to give Question
-General Question not in the PDF"""
+Telling the LLM to give Question"""
 
 RAG_SYSTEM_PROMPT = """You are a precise question-answering assistant. Answer the QUESTION using only the CONTEXT provided, citing the supporting parts. If the CONTEXT lacks the answer, say: "The provided context does not contain enough information to answer this question." Keep answers concise unless a detailed explanation is requested."""
 
@@ -278,13 +274,10 @@ def build_graph():
         messages = [("system", CLASSIFIER_SYSTEM_PROMPT), ("human", user_prompt)]
         response = llm.invoke(messages)
         category = response.content
-        cat_lower = category.lower()
-        if "telling the llm to give question" in cat_lower:
-            category = "Telling the LLM to give Question"
-        elif "general question not in the pdf" in cat_lower:
-            category = "General Question not in the PDF"
-        elif "question asked to llm" in cat_lower:
+        if "question asked to llm" in category.lower():
             category = "Question asked to LLM"
+        elif "telling the llm to give question" in category.lower():
+            category = "Telling the LLM to give Question"
         return {"messages": [("human", user_prompt), ("ai", response.content)], "query_type": category}
 
     def give_context(state: State) -> dict:
@@ -300,21 +293,6 @@ def build_graph():
         parser = StrOutputParser()
         chain = llm | parser
         messages = [("system", RAG_SYSTEM_PROMPT), ("human", user_prompt)]
-        answer = chain.invoke(messages)
-        return {"messages": [("human", user_prompt), ("ai", answer)]}
-
-    def give_general_answer(state: State) -> dict:
-        question_asked = state["asked_question"]
-        user_prompt = f"The question asked is {question_asked}"
-        parser = StrOutputParser()
-        chain = llm | parser
-        general_system_prompt = (
-            "You are a helpful general-knowledge assistant. The user's question is outside "
-            "the scope of the reference book this tutor is built on, so answer it directly from "
-            "your own general knowledge, concisely and accurately. Do not mention the book or "
-            "say the topic is out of scope — just answer the question."
-        )
-        messages = [("system", general_system_prompt), ("human", user_prompt)]
         answer = chain.invoke(messages)
         return {"messages": [("human", user_prompt), ("ai", answer)]}
 
@@ -361,19 +339,12 @@ def build_graph():
         return {"evaluation_report": report}
 
     def route_query(state: State):
-        category = state["query_type"]
-        if category == "Question asked to LLM":
-            return "Get_Context"
-        elif category == "General Question not in the PDF":
-            return "Give_General_Answer"
-        else:
-            return "Concept_Extractor"
+        return "Get_Context" if state["query_type"] == "Question asked to LLM" else "Concept_Extractor"
 
     graph = StateGraph(State)
     graph.add_node("Classifier", classifier)
     graph.add_node("Get_Context", give_context)
     graph.add_node("Give_Answer", give_answer)
-    graph.add_node("Give_General_Answer", give_general_answer)
     graph.add_node("Concept_Extractor", concept_extractor)
     graph.add_node("Make Question Paper", make_paper)
     graph.add_node("Human_Answer", human_answer_node)
@@ -383,7 +354,6 @@ def build_graph():
     graph.add_conditional_edges("Classifier", route_query)
     graph.add_edge("Get_Context", "Give_Answer")
     graph.add_edge("Give_Answer", END)
-    graph.add_edge("Give_General_Answer", END)
     graph.add_edge("Concept_Extractor", "Make Question Paper")
     graph.add_edge("Make Question Paper", "Human_Answer")
     graph.add_edge("Human_Answer", "Evaluate_Answer")
@@ -392,63 +362,59 @@ def build_graph():
     return graph.compile(checkpointer=MemorySaver())
 
 
-def render_workflow():
-    stage = st.session_state.stage
-    qtype = st.session_state.query_type
+NODE_LABELS = {
+    "Classifier": "Classifier",
+    "Get_Context": "Get context",
+    "Give_Answer": "Give answer",
+    "Concept_Extractor": "Extract concepts",
+    "Make Question Paper": "Make paper",
+    "Human_Answer": "Human answers",
+    "Evaluate_Answer": "Evaluate answer",
+}
 
-    def cls(node_active, node_done=False):
-        if node_done:
-            return "wf-node done"
-        return "wf-node active" if node_active else "wf-node"
+def render_workflow(placeholder=None):
+    completed = st.session_state.get("completed_nodes", set())
+    active = st.session_state.get("active_node")
 
-    classifier_active = stage != "idle"
-    branch_a = classifier_active and qtype == "Question asked to LLM"
-    branch_b = classifier_active and qtype == "Telling the LLM to give Question"
-    branch_c = classifier_active and qtype == "General Question not in the PDF"
+    def node_html(key):
+        label = NODE_LABELS[key]
+        if key in completed:
+            return f'<div class="wf-node done">✓ {label}</div>'
+        if key == active:
+            return f'<div class="wf-node active">{label}</div>'
+        return f'<div class="wf-node">{label}</div>'
 
-    paper_reached = branch_b and stage in ("paper", "evaluated")
-    human_reached = branch_b and stage in ("paper", "evaluated")
-    eval_reached = branch_b and stage == "evaluated"
-
-    concepts_active = branch_b
-    human_class = "wf-node"
-    if stage == "paper" and branch_b:
-        human_class = "wf-node active"
-    elif eval_reached:
-        human_class = "wf-node done"
+    def arrow_html(from_key):
+        state = "active" if (from_key in completed or from_key == active) else ""
+        return f'<div class="wf-down {state}">↓</div>'
 
     html = f"""
     <div class="wf-wrap">
       <div class="wf-caption">How this request is routed</div>
-      <div class="wf-root-row"><div class="{cls(classifier_active)}">Classifier</div></div>
-      <div class="wf-down {'active' if classifier_active else ''}">↓</div>
+      <div class="wf-root-row">{node_html('Classifier')}</div>
+      {arrow_html('Classifier')}
       <div class="wf-branches">
         <div class="wf-col">
           <div class="wf-col-label">In the PDF</div>
-          <div class="{cls(branch_a)}">Get context</div>
-          <div class="wf-down {'active' if branch_a else ''}">↓</div>
-          <div class="{cls(branch_a)}">Give answer</div>
-        </div>
-        <div class="wf-col">
-          <div class="wf-col-label">Not in the PDF</div>
-          <div class="{cls(branch_c)}">Give general answer</div>
-          <div class="wf-down {'active' if branch_c else ''}">↓</div>
-          <div class="{cls(branch_c)}">Answer returned</div>
+          {node_html('Get_Context')}
+          {arrow_html('Get_Context')}
+          {node_html('Give_Answer')}
         </div>
         <div class="wf-col">
           <div class="wf-col-label">Make a question paper</div>
-          <div class="{cls(concepts_active)}">Extract concepts</div>
-          <div class="wf-down {'active' if branch_b else ''}">↓</div>
-          <div class="{cls(branch_b)}">Make paper</div>
-          <div class="wf-down {'active' if human_reached else ''}">↓</div>
-          <div class="{human_class}">Human answers</div>
-          <div class="wf-down {'active' if eval_reached else ''}">↓</div>
-          <div class="{cls(eval_reached)}">Evaluate answer</div>
+          {node_html('Concept_Extractor')}
+          {arrow_html('Concept_Extractor')}
+          {node_html('Make Question Paper')}
+          {arrow_html('Make Question Paper')}
+          {node_html('Human_Answer')}
+          {arrow_html('Human_Answer')}
+          {node_html('Evaluate_Answer')}
         </div>
       </div>
     </div>
     """
-    st.markdown(html, unsafe_allow_html=True)
+    target = placeholder if placeholder is not None else st
+    target.markdown(html, unsafe_allow_html=True)
 
 
 
@@ -464,6 +430,10 @@ if "evaluation_report" not in st.session_state:
     st.session_state.evaluation_report = None
 if "query_type" not in st.session_state:
     st.session_state.query_type = None
+if "completed_nodes" not in st.session_state:
+    st.session_state.completed_nodes = set()
+if "active_node" not in st.session_state:
+    st.session_state.active_node = None
 
 mistral_key_present = bool(os.getenv("MISTRAL_API_KEY"))
 
@@ -519,7 +489,8 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-render_workflow()
+workflow_placeholder = st.empty()
+render_workflow(workflow_placeholder)
 
 if run_clicked:
     if not question.strip():
