@@ -256,7 +256,7 @@ OVERALL FEEDBACK: <2-3 line summary>"""
 def build_retriever(pdf_path: str):
     data = PyPDFLoader(pdf_path)
     docs = data.load()
-    embedding_model = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    embedding_model = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     chunk_docs = splitter.split_documents(docs)
     vector_store = Chroma.from_documents(documents=chunk_docs, embedding=embedding_model)
