@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from langchain_groq import ChatGroq  # noqa: F401 (kept for parity with original pipeline)
-from langchain_mistralai import MistralAIEmbeddings, ChatMistralAI
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from typing import TypedDict, Annotated
@@ -256,7 +256,7 @@ OVERALL FEEDBACK: <2-3 line summary>"""
 def build_retriever(pdf_path: str):
     data = PyPDFLoader(pdf_path)
     docs = data.load()
-    embedding_model = MistralAIEmbeddings(model="mistral-embed-2312")
+    embedding_model = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     chunk_docs = splitter.split_documents(docs)
     vector_store = Chroma.from_documents(documents=chunk_docs, embedding=embedding_model)
@@ -268,7 +268,7 @@ def build_retriever(pdf_path: str):
 
 @st.cache_resource(show_spinner=False)
 def build_graph():
-    llm = ChatMistralAI(model="mistral-medium-3-5", temperature=0.2)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
 
     def classifier(state: State) -> dict:
         question_asked = state["asked_question"]
@@ -437,7 +437,7 @@ if "completed_nodes" not in st.session_state:
 if "active_node" not in st.session_state:
     st.session_state.active_node = None
 
-mistral_key_present = bool(os.getenv("MISTRAL_API_KEY"))
+google_key_present = "GOOGLE_API_KEY" in st.secrets or bool(os.getenv("GOOGLE_API_KEY"))
 
 # =========================================================
 # SIDEBAR
@@ -451,8 +451,8 @@ with st.sidebar:
     <p class="tagline">RAG Q&amp;A · Question papers · AI evaluation</p>
     """, unsafe_allow_html=True)
 
-    dot_class = "dot-on" if mistral_key_present else "dot-off"
-    status_text = "Mistral API key connected" if mistral_key_present else "Mistral API key missing"
+    dot_class = "dot-on" if google_key_present else "dot-off"
+    status_text = "Google API key connected" if google_key_present else "Google API key missing"
     st.markdown(f"""
     <div class="status-badge"><span class="dot {dot_class}"></span>{status_text}</div>
     """, unsafe_allow_html=True)
@@ -480,14 +480,14 @@ st.markdown('<div class="kicker">Adaptive Learning &amp; Assessment Engine</div>
 st.markdown('<div class="hero-title">TutorLens AI</div>', unsafe_allow_html=True)
 st.markdown("""
 <p class="hero-sub">Ask a question and get a grounded answer, or request a paper and get a
-full 30-mark exam with instant AI evaluation — built on retrieval, LangGraph routing, and Mistral.</p>
+full 30-mark exam with instant AI evaluation — built on retrieval, LangGraph routing, and Google Gemini.</p>
 """, unsafe_allow_html=True)
 st.markdown("""
 <div class="pills-row">
     <div class="pill">🧩 LangGraph</div>
     <div class="pill">🔗 LangChain</div>
     <div class="pill">🎯 Chroma + MMR</div>
-    <div class="pill">🤖 Mistral</div>
+    <div class="pill">🤖 Gemini</div>
 </div>
 """, unsafe_allow_html=True)
 
